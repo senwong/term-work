@@ -14,6 +14,18 @@ LABEL = 'local.kaku-work.watcher'
 SOURCE = Path(__file__).resolve().parent
 MARKER = '# Installed by kaku-work'
 
+def install_sources(source):
+    files = {}
+    for name in ('work', 'watcher.py', 'install.py', 'README.md', 'LICENSE', 'VERSION'):
+        file = source / name
+        # Homebrew relocates documentation from libexec to the formula prefix.
+        if not file.is_file() and name in ('README.md', 'LICENSE'):
+            file = source.parent / name
+        if not file.is_file():
+            raise ValueError(f'Installation source is incomplete: {name}')
+        files[name] = file
+    return files
+
 def paths(home):
     root = home / '.local/share/kaku-work'
     return root, root / 'app', home / '.local/bin/work', home / 'Library/LaunchAgents' / (LABEL + '.plist')
@@ -50,6 +62,7 @@ def main():
     if plist.exists() and plistlib.loads(plist.read_bytes()).get('Label') != LABEL:
         raise ValueError(f'Refusing to overwrite unrelated service: {plist}')
     if not args.uninstall:
+        sources = install_sources(SOURCE)
         work = importlib.machinery.SourceFileLoader('kaku_work_install', str(SOURCE / 'work')).load_module()
         kaku, claude = work.executable('kaku'), work.executable('claude')
         config = make_plist(home, sys.executable, kaku, claude)
@@ -67,8 +80,8 @@ def main():
     app.mkdir(parents=True, exist_ok=True)
     launcher.parent.mkdir(parents=True, exist_ok=True)
     plist.parent.mkdir(parents=True, exist_ok=True)
-    for filename in ('work', 'watcher.py', 'install.py', 'README.md', 'LICENSE', 'VERSION'):
-        source, dest = SOURCE / filename, app / filename
+    for filename, source in sources.items():
+        dest = app / filename
         if source.resolve() != dest.resolve():
             shutil.copy2(source, dest)
     if launcher.is_symlink():

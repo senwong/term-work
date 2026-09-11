@@ -23,12 +23,12 @@ kaku-work-setup
 
 ### GitHub Release（无需 Git）
 
-从 [Releases](https://github.com/senwong/kaku-work/releases/latest) 下载 `kaku-work-0.1.0-macos.tar.gz` 和 `SHA256SUMS`，放在同一个目录：
+从 [Releases](https://github.com/senwong/kaku-work/releases/latest) 下载 `kaku-work-0.1.1-macos.tar.gz` 和 `SHA256SUMS`，放在同一个目录：
 
 ```sh
 shasum -a 256 -c SHA256SUMS
-tar -xzf kaku-work-0.1.0-macos.tar.gz
-cd kaku-work-0.1.0
+tar -xzf kaku-work-0.1.1-macos.tar.gz
+cd kaku-work-0.1.1
 python3 install.py
 ```
 
@@ -143,6 +143,6 @@ python3 -m unittest discover -v
 
 测试使用合成会话和临时目录，不会关闭实际 Tab 或修改真实会话。包含关闭观察期、整体退出、采样中断、GUI ID 复用、会话切换、完成状态与安装器检查。真实重启仍需在自己的环境中验证。
 
-维护者发布：更新 `VERSION`、提交后创建对应版本标签，运行 `python3 build_release.py v0.1.0`。将 `dist/` 内的安装包和 `SHA256SUMS` 上传至对应 GitHub Release，然后更新独立 Tap 中的下载 URL 和 SHA-256。打包只读取已提交的标签，不包含工作区会话数据。
+维护者发布：更新 `VERSION`、提交后创建对应版本标签，运行 `python3 build_release.py v0.1.1`。将 `dist/` 内的安装包和 `SHA256SUMS` 上传至对应 GitHub Release，然后更新独立 Tap 中的下载 URL 和 SHA-256。打包只读取已提交的标签，不包含工作区会话数据。
 
 MIT License.

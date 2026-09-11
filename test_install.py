@@ -11,6 +11,20 @@ from unittest.mock import patch
 import install
 
 class InstallerTests(unittest.TestCase):
+    def test_homebrew_relocated_docs_and_incomplete_source(self):
+        with tempfile.TemporaryDirectory() as temp:
+            prefix = Path(temp)
+            source = prefix / 'libexec'
+            source.mkdir()
+            for name in ('work', 'watcher.py', 'install.py', 'VERSION'):
+                (source / name).write_text('test')
+            for name in ('README.md', 'LICENSE'):
+                (prefix / name).write_text('documentation')
+            self.assertEqual(install.install_sources(source)['README.md'], prefix / 'README.md')
+            (source / 'VERSION').unlink()
+            with self.assertRaises(ValueError):
+                install.install_sources(source)
+
     def test_paths_and_plist_support_spaces_and_apple_silicon(self):
         home = Path('/Users/example user')
         p = install.make_plist(home, '/opt/homebrew/bin/python3',
