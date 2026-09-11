@@ -131,6 +131,8 @@ def run(name):
 
 def main():
     parser = argparse.ArgumentParser(description='Kaku + Claude 需求会话一键恢复')
+    parser.add_argument('--version', action='version',
+                        version='kaku-work ' + Path(SELF).with_name('VERSION').read_text().strip())
     sub = parser.add_subparsers(dest='cmd', required=True)
     p = sub.add_parser('start', help='新建需求并打开 Tab；同名需求恢复')
     p.add_argument('name'); p.add_argument('--cwd', default=os.getcwd())

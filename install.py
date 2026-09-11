@@ -67,7 +67,7 @@ def main():
     app.mkdir(parents=True, exist_ok=True)
     launcher.parent.mkdir(parents=True, exist_ok=True)
     plist.parent.mkdir(parents=True, exist_ok=True)
-    for filename in ('work', 'watcher.py', 'install.py', 'README.md', 'LICENSE'):
+    for filename in ('work', 'watcher.py', 'install.py', 'README.md', 'LICENSE', 'VERSION'):
         source, dest = SOURCE / filename, app / filename
         if source.resolve() != dest.resolve():
             shutil.copy2(source, dest)

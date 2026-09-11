@@ -10,6 +10,32 @@ work restore
 
 ## 安装
 
+### Homebrew（推荐）
+
+```sh
+brew install senwong/tap/kaku-work
+kaku-work-setup
+```
+
+第一条安装程序和 Python 依赖；第二条在当前用户下启用后台监听，并安装 `work` 命令。`kaku-work` 也是同一 CLI 的 Homebrew 命令名。请先安装 Kaku 和 Claude Code。软件来自项目自己的 [Homebrew Tap](https://github.com/senwong/homebrew-tap)，不属于 homebrew/core。
+
+更新：`brew upgrade kaku-work`，然后再次执行 `kaku-work-setup`，更新后台服务使用的副本。卸载：先 `kaku-work-setup --uninstall`，再 `brew uninstall kaku-work`；会话记录保留。不要再用 `brew services` 启动第二个监听器。
+
+### GitHub Release（无需 Git）
+
+从 [Releases](https://github.com/senwong/kaku-work/releases/latest) 下载 `kaku-work-0.1.0-macos.tar.gz` 和 `SHA256SUMS`，放在同一个目录：
+
+```sh
+shasum -a 256 -c SHA256SUMS
+tar -xzf kaku-work-0.1.0-macos.tar.gz
+cd kaku-work-0.1.0
+python3 install.py
+```
+
+这是 Intel / Apple Silicon 通用的 Python 源码安装包，不是独立二进制或 DMG；需要本机 Python 3.9+、Kaku 和 Claude Code。下载页的版本号升级时，请相应替换文件名。
+
+### 从源码安装
+
 需要 macOS、Python **3.9+**、[Kaku](https://github.com/tw93/Kaku) 和 [Claude Code](https://code.claude.com/docs/en/overview)。支持 Intel 和 Apple Silicon；Python 可以通过 Homebrew 或 python.org 安装。
 
 ```sh
@@ -116,5 +142,7 @@ python3 -m unittest discover -v
 ```
 
 测试使用合成会话和临时目录，不会关闭实际 Tab 或修改真实会话。包含关闭观察期、整体退出、采样中断、GUI ID 复用、会话切换、完成状态与安装器检查。真实重启仍需在自己的环境中验证。
+
+维护者发布：更新 `VERSION`、提交后创建对应版本标签，运行 `python3 build_release.py v0.1.0`。将 `dist/` 内的安装包和 `SHA256SUMS` 上传至对应 GitHub Release，然后更新独立 Tap 中的下载 URL 和 SHA-256。打包只读取已提交的标签，不包含工作区会话数据。
 
 MIT License.
