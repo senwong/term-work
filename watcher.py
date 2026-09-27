@@ -10,14 +10,11 @@ import uuid
 INTERVAL = 3
 GRACE = 15
 
-def gui_identity():
-    rows = subprocess.check_output(['ps', '-axo', 'pid=,lstart=,comm='],
-                                   text=True, timeout=10)
-    return tuple(sorted(row.strip() for row in rows.splitlines()
-                        if row.strip().endswith('/kaku-gui')))
+from terminals import NAMES, Terminal, installed, gui_identity
 
 class Observer:
-    def __init__(self):
+    def __init__(self, terminal='kaku'):
+        self.terminal = terminal
         self.previous = None
         self.pending = {}
 
@@ -29,17 +26,40 @@ class Observer:
         if not continuous:
             self.pending.clear()
         # Match using validated live process TTY; never infer session IDs from titles.
+        # AppleScript-only terminals (Ghostty) expose no TTY, so fall back to a cwd that
+        # is unique across both panes and live sessions; ambiguity keeps recovery records.
+        cwd_panes = {}
+        cwd_sessions = {}
+        for pane in current.values():
+            if pane.get('working_directory'):
+                cwd_panes[pane['working_directory']] = cwd_panes.get(pane['working_directory'], 0) + 1
+        for session in sessions:
+            cwd_sessions[session['cwd']] = cwd_sessions.get(session['cwd'], 0) + 1
         for pane_id, pane in current.items():
-            hits = [s for s in sessions if s['tty'] == pane.get('tty_name')]
-            if len(hits) != 1:
-                continue
-            session = hits[0]
-            sid = str(uuid.UUID(session['sessionId']))
+            tty = pane.get('tty_name')
+            if tty:
+                hits = [s for s in sessions if s['tty'] == tty]
+            else:
+                cwd = pane.get('working_directory')
+                hits = [s for s in sessions if s['cwd'] == cwd] \
+                    if cwd and cwd_panes.get(cwd) == 1 and cwd_sessions.get(cwd) == 1 else []
+            session = hits[0] if len(hits) == 1 else None
+            sid = str(uuid.UUID(session['sessionId'])) if session else None
             same = [(n, t) for n, t in data.items() if t['session'] == sid]
             if not same and continuous:
                 same = [(n, t) for n, t in data.items()
-                        if t.get('pane_id') == pane_id and t.get('gui') == list(identity)
-                        and t.get('state') != 'done']
+                        if t.get('terminal', 'kaku') == self.terminal and str(t.get('pane_id')) == pane_id
+                        and t.get('gui') == list(identity) and t.get('state') != 'done']
+                # Ghostty may report no cwd for exec'd surfaces; reuse the pane's bound
+                # session when it is still live so close detection keeps working.
+                if session is None and len(same) == 1:
+                    session = next((s for s in sessions
+                                    if str(uuid.UUID(s['sessionId'])) == same[0][1]['session']), None)
+                    sid = str(uuid.UUID(session['sessionId'])) if session else None
+            if session is None:
+                continue
+            if not same:
+                same = [(n, t) for n, t in data.items() if t['session'] == sid]
             if same:
                 name, task = same[0]
                 if task.get('state') == 'done':
@@ -51,7 +71,7 @@ class Observer:
                 task = dict(key=str(uuid.uuid4()), config=str(config), tracked=True)
                 data[name] = task
             # Keep the command name stable; store the latest visible title separately.
-            task.update(session=sid, cwd=session['cwd'], pane_id=pane_id,
+            task.update(terminal=self.terminal, session=sid, cwd=session['cwd'], pane_id=pane_id,
                         gui=list(identity), tab_title=pane.get('tab_title', ''),
                         state='active', last_seen=time.time())
             self.pending.pop(task['key'], None)
@@ -60,7 +80,7 @@ class Observer:
             removed = set(previous['panes']) - set(current)
             survivors = set(previous['panes']) & set(current)
             for task in data.values():
-                if task.get('state') in ('done', 'closed'):
+                if task.get('terminal', 'kaku') != self.terminal or task.get('state') in ('done', 'closed'):
                     continue
                 pane_id = task.get('pane_id')
                 if task.get('gui') != list(identity) or pane_id not in removed:
@@ -84,7 +104,7 @@ class Observer:
 
     def disconnected(self, data):
         for task in data.values():
-            if task.get('state', 'active') == 'active':
+            if task.get('terminal', 'kaku') == self.terminal and task.get('state', 'active') == 'active':
                 task['state'] = 'uncertain'
         self.previous = None
         self.pending.clear()
@@ -96,25 +116,30 @@ def watch(work):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise ValueError('监听器已经运行。')
-        observer = Observer()
+        observers = {name: Observer(name) for name in NAMES}
+        retry_after = {}
         config = Path(os.environ.get('CLAUDE_CONFIG_DIR', str(Path.home() / '.claude'))).resolve()
-        print('Kaku work watcher started; interval=3s, close grace=15s', flush=True)
+        print('Workspace watcher started: Kaku / WezTerm / iTerm2 / Ghostty; interval=3s', flush=True)
         while True:
-            try:
-                identity = gui_identity()
-                if not identity:
-                    with work.database() as data:
-                        observer.disconnected(data)
-                else:
-                    panes = json.loads(work.cli('list', '--format', 'json'))
-                    sessions = work.live_sessions(config)
-                    # Reject samples that straddle GUI exit/restart.
-                    if gui_identity() != identity:
-                        raise ValueError('Kaku changed during sample')
+            sessions = work.live_sessions(config)
+            enabled = os.environ.get('TERM_WORK_TERMINALS', ','.join(NAMES)).split(',')
+            for name, observer in observers.items():
+                if name not in enabled or time.monotonic() < retry_after.get(name, 0):
+                    continue
+                try:
+                    identity = gui_identity(name)
+                    if not identity:
+                        with work.database() as data:
+                            observer.disconnected(data)
+                        continue
+                    panes = Terminal(name).panes()
+                    if gui_identity(name) != identity:
+                        raise ValueError('Terminal changed during sample')
                     with work.database() as data:
                         observer.update(data, panes, sessions, identity, config, time.monotonic())
-            except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
-                print(f'Sample unavailable; keeping recovery records: {exc}', flush=True)
-                with work.database() as data:
-                    observer.disconnected(data)
+                except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
+                    print(f'{name}: keeping recovery records: {exc}', flush=True)
+                    with work.database() as data:
+                        observer.disconnected(data)
+                    retry_after[name] = time.monotonic() + 60
             time.sleep(INTERVAL)

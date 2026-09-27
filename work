@@ -1,30 +1,19 @@
 #!/usr/bin/env python3
-"""Persistent named Claude work tabs for Kaku (stdlib only)."""
+"""Persistent Claude workspaces across macOS terminals (stdlib only)."""
 import argparse
 import fcntl
 import json
 import os
-import shutil
 from pathlib import Path
 import subprocess
 import sys
 import uuid
 from contextlib import contextmanager
 
-ROOT = Path(os.environ.get('KAKU_WORK_HOME', str(Path.home() / '.local/share/kaku-work')))
+ROOT = Path(os.environ.get('TERM_WORK_HOME', str(Path.home() / '.local/share/term-work')))
 SELF = str(Path(__file__).resolve())
 
-def executable(name):
-    override = os.environ.get('KAKU_WORK_' + name.upper())
-    candidates = [override, shutil.which(name)]
-    if name == 'kaku':
-        candidates += [str(Path.home() / '.config/kaku/zsh/bin/kaku'),
-                       '/Applications/Kaku.app/Contents/MacOS/kaku',
-                       str(Path.home() / 'Applications/Kaku.app/Contents/MacOS/kaku')]
-    for candidate in candidates:
-        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            return candidate
-    raise ValueError(f'找不到 {name}，请安装并加入 PATH，或设置 KAKU_WORK_{name.upper()}。')
+from terminals import Terminal, NAMES, choose, executable, installed, gui_identity
 
 @contextmanager
 def database():
@@ -68,30 +57,33 @@ def live_sessions(config):
             continue
     return result
 
-def save_tabs():
-    panes = json.loads(cli('list', '--format', 'json'))
+def save_tabs(terminal=None):
+    from watcher import Observer
     config = Path(os.environ.get('CLAUDE_CONFIG_DIR', str(Path.home() / '.claude'))).resolve()
     sessions = live_sessions(config)
-    count = 0
-    with database() as data:
-        for pane in panes:
-            matches = [s for s in sessions if s['tty'] == pane.get('tty_name')]
-            if len(matches) != 1:
-                continue
-            session = matches[0]
-            sid = str(uuid.UUID(session['sessionId']))
-            if any(t['session'] == sid for t in data.values()):
-                continue
-            name = pane.get('tab_title') or session.get('name') or sid[:8]
-            if name in data:
-                name += '-' + sid[:8]
-            data[name] = dict(key=str(uuid.uuid4()), cwd=session['cwd'], session=sid,
-                              config=str(config), tracked=True)
-            count += 1
-            print(f'已保存：{name} → {session["cwd"]}')
-    print(f'新增 {count} 个需求；已登记的会话保留。')
+    names = [terminal] if terminal else [n for n in NAMES if installed(n) and gui_identity(n)]
+    failures = []
+    for name in names:
+        try:
+            identity = gui_identity(name)
+            if not identity:
+                raise ValueError('请先打开 ' + name)
+            panes = Terminal(name).panes()
+            if gui_identity(name) != identity:
+                raise ValueError('终端在读取期间退出，请重试。')
+            with database() as data:
+                before = len(data)
+                Observer(name).update(data, panes, sessions, identity, config, 0)
+                print(f'{name}: 新增 {len(data) - before} 个需求，已更新现有会话。')
+        except (ValueError, OSError, subprocess.SubprocessError) as exc:
+            print(f'{name}: {exc}', file=sys.stderr)
+            failures.append(name)
+    if failures:
+        raise ValueError('部分终端读取失败，原记录保留。')
+    if not names:
+        print('没有运行中的受支持终端。')
 
-def launch(name, task):
+def launch(name, task, terminal=None):
     if running(task):
         with database() as data:
             if name in data:
@@ -100,12 +92,16 @@ def launch(name, task):
         return
     if not Path(task['cwd']).is_dir():
         raise ValueError(f'工作目录不存在：{task["cwd"]}')
-    pane = cli('spawn', '--cwd', task['cwd'], '--', '/bin/zsh', '-lc',
-               '"$1" "$2" _run "$3"; exec /bin/zsh -l', 'work', sys.executable, SELF, name)
-    cli('set-tab-title', '--pane-id', pane, name)
+    backend = terminal or task.get('terminal', 'kaku')
+    argv = ['/usr/bin/env', 'TERM_WORK_HOME=' + str(ROOT), '/bin/zsh', '-lc',
+            '"$1" "$2" _run "$3"; exec /bin/zsh -l', 'work', sys.executable, SELF, name]
+    pane = Terminal(backend).spawn(task['cwd'], argv, name)
     with database() as data:
         if name in data:
             data[name]['state'] = 'active'
+            data[name]['terminal'] = backend
+            if pane:
+                data[name]['pane_id'] = str(pane)
     print(f'已打开：{name}')
 
 def run(name):
@@ -130,29 +126,38 @@ def run(name):
         subprocess.call([executable('claude'), flag, task['session'], '--settings', settings], env=env)
 
 def main():
-    parser = argparse.ArgumentParser(description='Kaku + Claude 需求会话一键恢复')
+    parser = argparse.ArgumentParser(description='Kaku / WezTerm / iTerm2 / Ghostty + Claude 会话一键恢复')
     parser.add_argument('--version', action='version',
-                        version='kaku-work ' + Path(SELF).with_name('VERSION').read_text().strip())
+                        version='term-work ' + Path(SELF).with_name('VERSION').read_text().strip())
     sub = parser.add_subparsers(dest='cmd', required=True)
     p = sub.add_parser('start', help='新建需求并打开 Tab；同名需求恢复')
     p.add_argument('name'); p.add_argument('--cwd', default=os.getcwd())
+    p.add_argument('--terminal', choices=NAMES)
     p = sub.add_parser('track', help='登记已有会话，不启动；先退出对应 Claude 会话')
     p.add_argument('name'); p.add_argument('session_id'); p.add_argument('--cwd', default=os.getcwd())
+    p.add_argument('--terminal', choices=NAMES)
     p = sub.add_parser('restore', help='恢复所有未完成需求')
     p.add_argument('name', nargs='?'); p.add_argument('--dry-run', action='store_true')
+    p.add_argument('--terminal', choices=NAMES, help='覆盖恢复目标终端')
     sub.add_parser('list', help='列出已登记需求')
-    sub.add_parser('save', help='登记当前 Kaku 中运行的 Claude 会话（通过进程和 TTY 精确对应）')
-    sub.add_parser('watch', help='持续监听 Kaku 和 Claude，每 3 秒检查一次')
+    p = sub.add_parser('save', help='立即扫描终端中的 Claude 会话')
+    p.add_argument('--terminal', choices=NAMES)
+    sub.add_parser('terminals', help='查看终端安装及运行状态')
+    sub.add_parser('watch', help='持续监听终端和 Claude，每 3 秒检查一次')
     p = sub.add_parser('done', help='移出恢复列表，保留 Claude 历史，不终止进程')
     p.add_argument('name')
     for command in ('_run', '_record'):
         p = sub.add_parser(command, help=argparse.SUPPRESS); p.add_argument('name')
     args = parser.parse_args()
+    if args.cmd == 'terminals':
+        for name in NAMES:
+            print(name, '已安装' if installed(name) else '未找到', '运行中' if gui_identity(name) else '未运行')
+        return
     if args.cmd == 'watch':
         from watcher import watch
         return watch(sys.modules[__name__])
     if args.cmd == 'save':
-        return save_tabs()
+        return save_tabs(args.terminal)
     if args.cmd == '_record':
         event = json.load(sys.stdin)
         sid = str(uuid.UUID(event['session_id']))
@@ -176,7 +181,7 @@ def main():
                     raise ValueError('此会话已登记。')
                 data[args.name] = dict(key=str(uuid.uuid4()), cwd=cwd, session=sid,
                     config=str(Path(os.environ.get('CLAUDE_CONFIG_DIR', str(Path.home() / '.claude'))).resolve()),
-                    tracked=args.cmd == 'track')
+                    tracked=args.cmd == 'track', terminal=choose(args.terminal))
         elif args.cmd == 'done':
             data[args.name]['state'] = 'done'
             print('已移出恢复列表；Claude 历史保留。')
@@ -186,7 +191,7 @@ def main():
             state = task.get('state', 'active')
             label = {'closed': '已关闭（默认不恢复）', 'done': '已完成', 'uncertain': '待恢复（退出原因不明）'}.get(state)
             label = label or ('运行中' if running(task) else '待恢复')
-            print(f'{name}\t{label}\t{task["cwd"]}\t{task["session"]}')
+            print(f"{name}\t{label}\t{task.get('terminal', 'kaku')}\t{task['cwd']}\t{task['session']}")
         if not snapshot:
             print('暂无需求。使用 work start 名称，或 work track 名称 会话ID。')
     elif args.cmd == 'track':
@@ -197,15 +202,15 @@ def main():
         failures = []
         for name, task in selected.items():
             if getattr(args, 'dry_run', False):
-                print(f'{name}\t{task["cwd"]}\t{task["session"]}')
+                print(f"{name}\t{args.terminal or task.get('terminal', 'kaku')}\t{task['cwd']}\t{task['session']}")
                 continue
             try:
-                launch(name, task)
+                launch(name, task, args.terminal)
             except (subprocess.SubprocessError, OSError, ValueError) as exc:
                 failures.append(name)
                 print(f'恢复失败 {name}: {exc}', file=sys.stderr)
         if failures:
-            raise ValueError('请确认 Kaku 已打开，然后重试 work restore；需求记录已保留。')
+            raise ValueError('请确认对应终端已打开，然后重试 work restore；需求记录已保留。')
 
 if __name__ == '__main__':
     try:

@@ -10,13 +10,13 @@ import shutil
 import subprocess
 import sys
 
-LABEL = 'local.kaku-work.watcher'
+LABEL = 'local.term-work.watcher'
 SOURCE = Path(__file__).resolve().parent
-MARKER = '# Installed by kaku-work'
+MARKER = '# Installed by term-work'
 
 def install_sources(source):
     files = {}
-    for name in ('work', 'watcher.py', 'install.py', 'README.md', 'LICENSE', 'VERSION'):
+    for name in ('work', 'watcher.py', 'terminals.py', 'install.py', 'README.md', 'LICENSE', 'VERSION'):
         file = source / name
         # Homebrew relocates documentation from libexec to the formula prefix.
         if not file.is_file() and name in ('README.md', 'LICENSE'):
@@ -27,20 +27,27 @@ def install_sources(source):
     return files
 
 def paths(home):
-    root = home / '.local/share/kaku-work'
+    root = home / '.local/share/term-work'
     return root, root / 'app', home / '.local/bin/work', home / 'Library/LaunchAgents' / (LABEL + '.plist')
 
-def make_plist(home, python, kaku, claude):
+def make_plist(home, python, kaku, claude, wezterm=None, enabled=None):
     root, app, _, _ = paths(home)
-    search = [str(Path(kaku).parent), str(Path(claude).parent), str(Path(python).parent),
+    search = [str(Path(p).parent) for p in (kaku, wezterm, claude, python) if p] + [
               str(home / '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin',
               '/usr/bin', '/bin', '/usr/sbin', '/sbin']
-    return dict(Label=LABEL, ProgramArguments=[python, str(app / 'work'), 'watch'],
+    result = dict(Label=LABEL, ProgramArguments=[python, str(app / 'work'), 'watch'],
                 RunAtLoad=True, KeepAlive=True, ThrottleInterval=10, WorkingDirectory=str(app),
                 EnvironmentVariables=dict(PATH=':'.join(dict.fromkeys(search)), PYTHONUNBUFFERED='1',
-                    KAKU_WORK_KAKU=kaku, KAKU_WORK_CLAUDE=claude,
+                    TERM_WORK_KAKU=kaku, TERM_WORK_CLAUDE=claude,
                     CLAUDE_CONFIG_DIR=str(Path(os.environ.get('CLAUDE_CONFIG_DIR', str(home / '.claude'))).expanduser().resolve())),
                 StandardOutPath=str(root / 'watcher.log'), StandardErrorPath=str(root / 'watcher.error.log'))
+    env = result['EnvironmentVariables']
+    if not kaku:
+        env.pop('TERM_WORK_KAKU')
+    if wezterm:
+        env['TERM_WORK_WEZTERM'] = wezterm
+    env['TERM_WORK_TERMINALS'] = ','.join(enabled or ['kaku'])
+    return result
 
 def owned_launcher(path):
     if path.is_symlink():
@@ -49,7 +56,10 @@ def owned_launcher(path):
     return path.is_file() and MARKER in path.read_text()
 
 def main():
-    parser = argparse.ArgumentParser(description='Install Kaku Work for the current macOS user')
+    parser = argparse.ArgumentParser(description='Install Term Work for the current macOS user')
+    from terminals import NAMES, installed
+    parser.add_argument('--terminal', choices=('auto',) + NAMES, default='auto',
+                        help='auto monitors all installed supported terminals')
     parser.add_argument('--uninstall', action='store_true', help='Remove command/service; keep session records')
     parser.add_argument('--no-start', action='store_true', help='Install without starting service now')
     args = parser.parse_args()
@@ -63,9 +73,16 @@ def main():
         raise ValueError(f'Refusing to overwrite unrelated service: {plist}')
     if not args.uninstall:
         sources = install_sources(SOURCE)
-        work = importlib.machinery.SourceFileLoader('kaku_work_install', str(SOURCE / 'work')).load_module()
-        kaku, claude = work.executable('kaku'), work.executable('claude')
-        config = make_plist(home, sys.executable, kaku, claude)
+        work = importlib.machinery.SourceFileLoader('term_work_install', str(SOURCE / 'work')).load_module()
+        enabled = [n for n in NAMES if installed(n)] if args.terminal == 'auto' else [args.terminal]
+        if not enabled:
+            raise ValueError('Install Kaku, WezTerm, iTerm2 or Ghostty first.')
+        if 'iterm2' in enabled and not installed('iterm2'):
+            raise ValueError('Install iTerm2 in /Applications or ~/Applications first.')
+        kaku = work.executable('kaku') if 'kaku' in enabled else None
+        wezterm = work.executable('wezterm') if 'wezterm' in enabled else None
+        claude = work.executable('claude')
+        config = make_plist(home, sys.executable, kaku, claude, wezterm, enabled)
     target = f'gui/{os.getuid()}'
     # Check before unloading so permission/errors never silently leave two services.
     loaded = subprocess.run(['launchctl', 'print', target + '/' + LABEL], capture_output=True).returncode == 0
@@ -94,7 +111,11 @@ def main():
         subprocess.run(['launchctl', 'bootstrap', target, str(plist)], check=True)
     print(f'Installed: {launcher}\nService: {plist}')
     print('Add ~/.local/bin to PATH if needed: export PATH="$HOME/.local/bin:$PATH"')
-    print('Open Kaku, then run: work list; work restore --dry-run')
+    print('Open your terminal, then run: work list; work restore --dry-run')
+    if 'iterm2' in enabled:
+        print('For iTerm2, run work save --terminal iterm2 in the foreground and allow macOS Automation if prompted.')
+    if 'ghostty' in enabled:
+        print('For Ghostty, run work save --terminal ghostty in the foreground and allow macOS Automation if prompted.')
 
 if __name__ == '__main__':
     try:

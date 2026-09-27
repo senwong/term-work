@@ -18,7 +18,7 @@ def main():
     version = subprocess.check_output(['git', 'show', args.tag + ':VERSION'], cwd=root, text=True).strip()
     if args.tag != 'v' + version:
         parser.error('Tag does not match committed VERSION')
-    prefix = 'kaku-work-' + version
+    prefix = 'term-work-' + version
     archive = subprocess.check_output(['git', 'archive', '--format=tar', '--prefix=' + prefix + '/', args.tag], cwd=root)
     output = io.BytesIO()
     with gzip.GzipFile(filename='', mode='wb', fileobj=output, mtime=0) as compressed:

@@ -16,7 +16,7 @@ class InstallerTests(unittest.TestCase):
             prefix = Path(temp)
             source = prefix / 'libexec'
             source.mkdir()
-            for name in ('work', 'watcher.py', 'install.py', 'VERSION'):
+            for name in ('work', 'watcher.py', 'terminals.py', 'install.py', 'VERSION'):
                 (source / name).write_text('test')
             for name in ('README.md', 'LICENSE'):
                 (prefix / name).write_text('documentation')
@@ -35,13 +35,13 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue(p['KeepAlive'])
 
     def test_install_upgrade_uninstall_preserves_records(self):
-        with tempfile.TemporaryDirectory(prefix='kaku work ') as temp:
+        with tempfile.TemporaryDirectory(prefix='term work ') as temp:
             home = Path(temp)
             root, app, launcher, plist = install.paths(home)
             fake_work = types.SimpleNamespace(executable=lambda n: '/tmp/' + n)
             with patch.object(Path, 'home', return_value=home), \
                  patch.object(sys, 'platform', 'darwin'), \
-                 patch.object(sys, 'argv', ['install.py', '--no-start']), \
+                 patch.object(sys, 'argv', ['install.py', '--no-start', '--terminal', 'kaku']), \
                  patch.object(install.importlib.machinery.SourceFileLoader, 'load_module', return_value=fake_work), \
                  patch.object(install.subprocess, 'run', return_value=types.SimpleNamespace(returncode=1)):
                 install.main()
